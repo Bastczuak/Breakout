@@ -1,0 +1,58 @@
+#![enable(implicit_some)]
+Container(
+    transform: (
+        id: "background",
+        anchor: Middle,
+        stretch: XY( x_margin: 0., y_margin: 0., keep_aspect_ratio: false),
+    ),
+    children: [
+        Label(
+            transform: (
+                id: "title",
+                y: 50,
+                width: 1280.,
+                height: 650.,
+                anchor: Middle,
+                opaque: false,
+            ),
+            text: (
+                text: "BREAKOUT",
+                font: File("fonts/font.ttf", ("TTF", ())),
+                font_size: 200.,
+                color: (1., 1., 1., 1.),
+            )
+        ),
+        Label(
+            transform: (
+                id: "start",
+                y: -400,
+                width: 1280.,
+                height: 550.,
+                anchor: Middle,
+                opaque: false,
+            ),
+            text: (
+                text: "START",
+                font: File("fonts/font.ttf", ("TTF", ())),
+                font_size: 100.,
+                color: (0.4, 1., 1., 1.),
+            )
+        ),
+        Label(
+            transform: (
+                id: "highscore",
+                y: -550,
+                width: 1280.,
+                height: 550.,
+                anchor: Middle,
+                opaque: false,
+            ),
+            text: (
+                text: "HIGH SCORES",
+                font: File("fonts/font.ttf", ("TTF", ())),
+                font_size: 100.,
+                color: (1., 1., 1., 1.),
+            )
+        ),
+    ],
+)
