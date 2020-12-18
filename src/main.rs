@@ -17,6 +17,18 @@ use amethyst::utils::application_root_dir;
 use amethyst::{
   Application, GameData, GameDataBuilder, SimpleState, SimpleTrans, StateData, StateEvent, Trans,
 };
+use std::collections::HashMap;
+
+macro_rules! assign_text_color {
+  ($self:ident, $field_name:ident, $ui_text: ident, $color:tt) => {
+    if let Some($field_name) = $self
+      .$field_name
+      .and_then(|entity| $ui_text.get_mut(entity))
+    {
+      $field_name.color = $color;
+    }
+  };
+}
 
 const VIRTUAL_WIDTH: f32 = 432.;
 const VIRTUAL_HEIGHT: f32 = 243.;
@@ -78,34 +90,14 @@ impl SimpleState for Breakout {
       let mut ui_text = world.write_storage::<UiText>();
 
       if is_key_down(&event, VirtualKeyCode::Up) && !self.up_key_pressed {
-        if let Some(start_ui_text) = self
-          .start_ui_text
-          .and_then(|entity| ui_text.get_mut(entity))
-        {
-          start_ui_text.color = [0.4, 1., 1., 1.];
-        }
-        if let Some(high_score_ui_text) = self
-          .high_score_ui_text
-          .and_then(|entity| ui_text.get_mut(entity))
-        {
-          high_score_ui_text.color = [1., 1., 1., 1.];
-        }
+        assign_text_color!(self, start_ui_text, ui_text, [0.4, 1., 1., 1.]);
+        assign_text_color!(self, high_score_ui_text, ui_text, [1., 1., 1., 1.]);
         play_paddle_hit_sound(&world);
         self.up_key_pressed = true;
       }
       if is_key_down(&event, VirtualKeyCode::Down) && !self.down_key_pressed {
-        if let Some(start_ui_text) = self
-          .start_ui_text
-          .and_then(|entity| ui_text.get_mut(entity))
-        {
-          start_ui_text.color = [1., 1., 1., 1.];
-        }
-        if let Some(high_score_ui_text) = self
-          .high_score_ui_text
-          .and_then(|entity| ui_text.get_mut(entity))
-        {
-          high_score_ui_text.color = [0.4, 1., 1., 1.];
-        }
+        assign_text_color!(self, start_ui_text, ui_text, [1., 1., 1., 1.]);
+        assign_text_color!(self, high_score_ui_text, ui_text, [0.4, 1., 1., 1.]);
         play_paddle_hit_sound(&world);
         self.down_key_pressed = true;
       }
