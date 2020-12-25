@@ -24,6 +24,17 @@ use amethyst::{
 };
 use std::collections::HashMap;
 
+///
+/// constants
+///
+
+const VIRTUAL_WIDTH: f32 = 432.;
+const VIRTUAL_HEIGHT: f32 = 243.;
+
+///
+/// macros
+///
+
 macro_rules! assign_text_color {
   ($self:ident, $field_name:ident, $ui_text: ident, $color:tt) => {
     if let Some($field_name) = $self
@@ -35,8 +46,9 @@ macro_rules! assign_text_color {
   };
 }
 
-const VIRTUAL_WIDTH: f32 = 432.;
-const VIRTUAL_HEIGHT: f32 = 243.;
+///
+/// enums
+///
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
 enum AssetType {
@@ -63,33 +75,105 @@ impl Default for TextSelectedType {
   }
 }
 
+///
+/// types
+///
+
 #[derive(Component)]
 #[storage(DenseVecStorage)]
 struct Paddle {
   width: f32,
 }
 
-struct PaddleSystem;
-
 #[derive(Default)]
 struct SpriteSheetMap(HashMap<AssetType, SpriteSheetHandle>);
+
 #[derive(Default)]
 struct SoundMap(HashMap<SoundType, SourceHandle>);
 
-#[derive(Default)]
-struct StartState {
-  title_ui_text: Option<Entity>,
-  start_ui_text: Option<Entity>,
-  high_score_ui_text: Option<Entity>,
-  progress_counter: Option<ProgressCounter>,
-  up_key_pressed: bool,
-  down_key_pressed: bool,
-  return_key_pressed: bool,
-  text_selected: TextSelectedType,
+/// functions
+
+fn init_camera(world: &mut World) {
+  world
+    .create_entity()
+    .with(Camera::standard_2d(VIRTUAL_WIDTH, VIRTUAL_HEIGHT))
+    .with(Transform::from(Vector3::new(0., 0., 10.)))
+    .build();
 }
 
-#[derive(Default)]
-struct PlayState;
+fn load_sprite_sheet_handle(
+  world: &World,
+  texture_path: &str,
+  ron_path: &str,
+  progress_counter: &mut ProgressCounter,
+) -> SpriteSheetHandle {
+  let texture_handle = {
+    let loader = world.read_resource::<Loader>();
+    let texture_storage = world.read_resource::<AssetStorage<Texture>>();
+    loader.load(texture_path, ImageFormat::default(), (), &texture_storage)
+  };
+  let loader = world.read_resource::<Loader>();
+  let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
+  loader.load(
+    ron_path,
+    SpriteSheetFormat(texture_handle),
+    progress_counter,
+    &sprite_sheet_store,
+  )
+}
+
+fn init_assets(world: &mut World, asset_type_list: Vec<AssetType>) -> ProgressCounter {
+  let mut sprite_sheet_map = SpriteSheetMap::default();
+  let mut progress_counter = ProgressCounter::new();
+  for &asset_type in asset_type_list.iter() {
+    let (texture_path, ron_path) = match asset_type {
+      AssetType::Background(_) => ("textures/background.png", "textures/background.ron"),
+      AssetType::PaddleSmall(_) | AssetType::PaddleMedium(_) => {
+        ("textures/breakout.png", "textures/breakout.ron")
+      }
+    };
+    let sprite_sheet_handle =
+      load_sprite_sheet_handle(world, texture_path, ron_path, &mut progress_counter);
+    sprite_sheet_map.0.insert(asset_type, sprite_sheet_handle);
+  }
+  world.insert(sprite_sheet_map);
+  progress_counter
+}
+
+fn init_audio(world: &mut World, sound_type_list: Vec<SoundType>) {
+  let mut sound_map = SoundMap::default();
+  for &sound_type in sound_type_list.iter() {
+    let sound_path = match sound_type {
+      SoundType::PaddleHit => "sounds/paddle_hit.wav",
+      SoundType::Confirm => "sounds/confirm.wav",
+    };
+    let source_handle = {
+      let loader = world.read_resource::<Loader>();
+      loader.load(sound_path, WavFormat, (), &world.read_resource())
+    };
+    sound_map.0.insert(sound_type, source_handle);
+  }
+  world.insert(sound_map);
+}
+
+fn play_sound(world: &World, sound_type: SoundType) {
+  let sound_map = world.read_resource::<SoundMap>();
+  let output = world.try_fetch::<Output>();
+  let storage = world.fetch::<AssetStorage<Source>>();
+  if let Some(ref output) = output.as_ref() {
+    if let Some(sound) = sound_map.0.get(&sound_type) {
+      if let Some(sound) = storage.get(&sound) {
+        output.play_once(sound, 0.15);
+      }
+    }
+  }
+}
+
+///
+/// systems
+///
+
+struct PaddleSystem;
 
 impl<'a> System<'a> for PaddleSystem {
   type SystemData = (
@@ -114,6 +198,22 @@ impl<'a> System<'a> for PaddleSystem {
       }
     }
   }
+}
+
+///
+/// States
+///
+
+#[derive(Default)]
+struct StartState {
+  title_ui_text: Option<Entity>,
+  start_ui_text: Option<Entity>,
+  high_score_ui_text: Option<Entity>,
+  progress_counter: Option<ProgressCounter>,
+  up_key_pressed: bool,
+  down_key_pressed: bool,
+  return_key_pressed: bool,
+  text_selected: TextSelectedType,
 }
 
 impl SimpleState for StartState {
@@ -277,6 +377,9 @@ impl SimpleState for StartState {
   }
 }
 
+#[derive(Default)]
+struct PlayState;
+
 impl SimpleState for PlayState {
   fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
     let world = data.world;
@@ -326,82 +429,9 @@ impl SimpleState for PlayState {
   }
 }
 
-fn init_camera(world: &mut World) {
-  world
-    .create_entity()
-    .with(Camera::standard_2d(VIRTUAL_WIDTH, VIRTUAL_HEIGHT))
-    .with(Transform::from(Vector3::new(0., 0., 10.)))
-    .build();
-}
-
-fn load_sprite_sheet_handle(
-  world: &World,
-  texture_path: &str,
-  ron_path: &str,
-  progress_counter: &mut ProgressCounter,
-) -> SpriteSheetHandle {
-  let texture_handle = {
-    let loader = world.read_resource::<Loader>();
-    let texture_storage = world.read_resource::<AssetStorage<Texture>>();
-    loader.load(texture_path, ImageFormat::default(), (), &texture_storage)
-  };
-  let loader = world.read_resource::<Loader>();
-  let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
-  loader.load(
-    ron_path,
-    SpriteSheetFormat(texture_handle),
-    progress_counter,
-    &sprite_sheet_store,
-  )
-}
-
-fn init_assets(world: &mut World, asset_type_list: Vec<AssetType>) -> ProgressCounter {
-  let mut sprite_sheet_map = SpriteSheetMap::default();
-  let mut progress_counter = ProgressCounter::new();
-  for &asset_type in asset_type_list.iter() {
-    let (texture_path, ron_path) = match asset_type {
-      AssetType::Background(_) => ("textures/background.png", "textures/background.ron"),
-      AssetType::PaddleSmall(_) | AssetType::PaddleMedium(_) => {
-        ("textures/breakout.png", "textures/breakout.ron")
-      }
-    };
-    let sprite_sheet_handle =
-      load_sprite_sheet_handle(world, texture_path, ron_path, &mut progress_counter);
-    sprite_sheet_map.0.insert(asset_type, sprite_sheet_handle);
-  }
-  world.insert(sprite_sheet_map);
-  progress_counter
-}
-
-fn init_audio(world: &mut World, sound_type_list: Vec<SoundType>) {
-  let mut sound_map = SoundMap::default();
-  for &sound_type in sound_type_list.iter() {
-    let sound_path = match sound_type {
-      SoundType::PaddleHit => "sounds/paddle_hit.wav",
-      SoundType::Confirm => "sounds/confirm.wav",
-    };
-    let source_handle = {
-      let loader = world.read_resource::<Loader>();
-      loader.load(sound_path, WavFormat, (), &world.read_resource())
-    };
-    sound_map.0.insert(sound_type, source_handle);
-  }
-  world.insert(sound_map);
-}
-
-fn play_sound(world: &World, sound_type: SoundType) {
-  let sound_map = world.read_resource::<SoundMap>();
-  let output = world.try_fetch::<Output>();
-  let storage = world.fetch::<AssetStorage<Source>>();
-  if let Some(ref output) = output.as_ref() {
-    if let Some(sound) = sound_map.0.get(&sound_type) {
-      if let Some(sound) = storage.get(&sound) {
-        output.play_once(sound, 0.15);
-      }
-    }
-  }
-}
-
+///
+/// main
+///
 fn main() -> amethyst::Result<()> {
   amethyst::start_logger(Default::default());
 
