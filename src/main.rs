@@ -1,12 +1,9 @@
+mod game_data;
+
+use crate::game_data::{BreakoutGameData, BreakoutGameDataBuilder};
 use amethyst::assets::{AssetStorage, Loader, ProgressCounter};
 use amethyst::audio::output::Output;
 use amethyst::audio::{AudioBundle, Source, SourceHandle, WavFormat};
-use amethyst::core::ecs::{
-  Builder, Component, DenseVecStorage, Entity, Join, Read, ReadStorage, System, World, WorldExt,
-  WriteStorage,
-};
-use amethyst::core::math::Vector3;
-use amethyst::core::{Hidden, Time, Transform, TransformBundle};
 use amethyst::input::{
   is_close_requested, is_key_down, is_key_up, InputBundle, InputHandler, StringBindings,
   VirtualKeyCode,
@@ -17,11 +14,18 @@ use amethyst::renderer::{
   Camera, ImageFormat, RenderFlat2D, RenderToWindow, RenderingBundle, SpriteRender, SpriteSheet,
   SpriteSheetFormat, Texture,
 };
-use amethyst::ui::{RenderUi, UiBundle, UiCreator, UiFinder, UiText};
 use amethyst::utils::application_root_dir;
 use amethyst::{
-  Application, GameData, GameDataBuilder, SimpleState, SimpleTrans, StateData, StateEvent, Trans,
+  core::{math::Vector3, Hidden, Time, Transform, TransformBundle},
+  derive::SystemDesc,
+  ecs::prelude::{
+    Builder, DenseVecStorage, Entity, Join, Read, ReadStorage, System, SystemData, World, WorldExt,
+    WriteStorage,
+  },
+  ecs::Component,
+  ui::{RenderUi, UiBundle, UiCreator, UiFinder, UiText},
 };
+use amethyst::{Application, State, StateData, StateEvent, Trans};
 use std::collections::HashMap;
 
 ///
@@ -173,6 +177,7 @@ fn play_sound(world: &World, sound_type: SoundType) {
 /// systems
 ///
 
+#[derive(Default, SystemDesc)]
 struct PaddleSystem;
 
 impl<'a> System<'a> for PaddleSystem {
@@ -216,8 +221,8 @@ struct StartState {
   text_selected: TextSelectedType,
 }
 
-impl SimpleState for StartState {
-  fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
+impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
+  fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
     world.exec(|mut creator: UiCreator<'_>| {
       creator.create("ui/text.ron", ());
@@ -235,7 +240,7 @@ impl SimpleState for StartState {
     ));
   }
 
-  fn on_stop(&mut self, data: StateData<'_, GameData<'_, '_>>) {
+  fn on_stop(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
     let mut hiddens = world.write_storage::<Hidden>();
 
@@ -258,10 +263,10 @@ impl SimpleState for StartState {
 
   fn handle_event(
     &mut self,
-    _data: StateData<'_, GameData<'_, '_>>,
+    data: StateData<'_, BreakoutGameData<'a, 'b>>,
     event: StateEvent<StringBindings>,
-  ) -> SimpleTrans {
-    let world = _data.world;
+  ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
+    let world = data.world;
     if let StateEvent::Window(event) = &event {
       if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
         return Trans::Quit;
@@ -310,7 +315,10 @@ impl SimpleState for StartState {
     Trans::None
   }
 
-  fn update(&mut self, data: &mut StateData<'_, GameData<'_, '_>>) -> SimpleTrans {
+  fn update(
+    &mut self,
+    mut data: StateData<'_, BreakoutGameData<'a, 'b>>,
+  ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
     let world = &mut data.world;
 
     if self.title_ui_text.is_none() {
@@ -372,6 +380,7 @@ impl SimpleState for StartState {
         self.progress_counter = None;
       }
     }
+    data.data.update(&world, true);
 
     Trans::None
   }
@@ -380,8 +389,8 @@ impl SimpleState for StartState {
 #[derive(Default)]
 struct PlayState;
 
-impl SimpleState for PlayState {
-  fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
+impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
+  fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
 
     let sprite_sheets_map = {
@@ -417,14 +426,24 @@ impl SimpleState for PlayState {
 
   fn handle_event(
     &mut self,
-    _data: StateData<'_, GameData<'_, '_>>,
+    _data: StateData<'_, BreakoutGameData<'a, 'b>>,
     event: StateEvent<StringBindings>,
-  ) -> SimpleTrans {
+  ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
     if let StateEvent::Window(event) = &event {
       if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
         return Trans::Quit;
       }
     }
+    Trans::None
+  }
+
+  fn update(
+    &mut self,
+    data: StateData<'_, BreakoutGameData<'a, 'b>>,
+  ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
+    let world = data.world;
+    data.data.update(&world, true);
+
     Trans::None
   }
 }
@@ -439,24 +458,26 @@ fn main() -> amethyst::Result<()> {
   let display_conf_path = app_root.join("config/display.ron");
   let bindings_config_path = app_root.join("config/bindings.ron");
   let asset_dir = app_root.join("assets");
-  let game_data = GameDataBuilder::default()
-    .with_bundle(
+  let app_builder = Application::build(asset_dir, StartState::default())?;
+  let game_data = BreakoutGameDataBuilder::default()
+    .with_running(PaddleSystem, "paddle_system", &["input_system"])
+    .with_base_bundle(TransformBundle::new())
+    .with_base_bundle(
+      InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?,
+    )
+    .with_base_bundle(UiBundle::<StringBindings>::new())
+    .with_base_bundle(AudioBundle::default())
+    .with_base_bundle(
       RenderingBundle::<DefaultBackend>::new()
         .with_plugin(
           RenderToWindow::from_config_path(display_conf_path)?.with_clear([0., 0., 0., 1.]),
         )
         .with_plugin(RenderFlat2D::default())
         .with_plugin(RenderUi::default()),
-    )?
-    .with_bundle(TransformBundle::new())?
-    .with_bundle(
-      InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?,
-    )?
-    .with_bundle(UiBundle::<StringBindings>::new())?
-    .with_bundle(AudioBundle::default())?
-    .with(PaddleSystem, "paddle_system", &["input_system"]);
-  let mut game = Application::new(asset_dir, StartState::default(), game_data)?;
+    );
 
+  let mut game = app_builder.build(game_data)?;
   game.run();
+
   Ok(())
 }
