@@ -460,7 +460,6 @@ fn main() -> amethyst::Result<()> {
   let asset_dir = app_root.join("assets");
   let app_builder = Application::build(asset_dir, StartState::default())?;
   let game_data = BreakoutGameDataBuilder::default()
-    .with_running(PaddleSystem, "paddle_system", &["input_system"])
     .with_base_bundle(TransformBundle::new())
     .with_base_bundle(
       InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?,
@@ -474,7 +473,8 @@ fn main() -> amethyst::Result<()> {
         )
         .with_plugin(RenderFlat2D::default())
         .with_plugin(RenderUi::default()),
-    );
+    )
+    .with_running(PaddleSystem, "paddle_system", &["input_system"]);
 
   let mut game = app_builder.build(game_data)?;
   game.run();
