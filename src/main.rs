@@ -5,7 +5,7 @@ use amethyst::assets::{AssetStorage, Loader, ProgressCounter};
 use amethyst::audio::output::Output;
 use amethyst::audio::{AudioBundle, Source, SourceHandle, WavFormat};
 use amethyst::input::{
-  is_close_requested, is_key_down, is_key_up, InputBundle, InputHandler, StringBindings,
+  is_close_requested, is_key_down, InputBundle, InputEvent, InputHandler, StringBindings,
   VirtualKeyCode,
 };
 use amethyst::renderer::sprite::SpriteSheetHandle;
@@ -65,6 +65,7 @@ enum AssetType {
 enum SoundType {
   PaddleHit,
   Confirm,
+  Pause,
 }
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
@@ -150,6 +151,7 @@ fn init_audio(world: &mut World, sound_type_list: Vec<SoundType>) {
     let sound_path = match sound_type {
       SoundType::PaddleHit => "sounds/paddle_hit.wav",
       SoundType::Confirm => "sounds/confirm.wav",
+      SoundType::Pause => "sounds/pause.wav",
     };
     let source_handle = {
       let loader = world.read_resource::<Loader>();
@@ -215,9 +217,6 @@ struct StartState {
   start_ui_text: Option<Entity>,
   high_score_ui_text: Option<Entity>,
   progress_counter: Option<ProgressCounter>,
-  up_key_pressed: bool,
-  down_key_pressed: bool,
-  return_key_pressed: bool,
   text_selected: TextSelectedType,
 }
 
@@ -229,7 +228,10 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
     });
 
     init_camera(world);
-    init_audio(world, vec![SoundType::PaddleHit, SoundType::Confirm]);
+    init_audio(
+      world,
+      vec![SoundType::PaddleHit, SoundType::Confirm, SoundType::Pause],
+    );
     self.progress_counter = Some(init_assets(
       world,
       vec![
@@ -267,53 +269,47 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
     event: StateEvent<StringBindings>,
   ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
     let world = data.world;
+
     if let StateEvent::Window(event) = &event {
       if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
         return Trans::Quit;
       }
+    }
 
-      let mut ui_text = world.write_storage::<UiText>();
-
-      if is_key_down(&event, VirtualKeyCode::Up) && !self.up_key_pressed {
-        assign_text_color!(self, start_ui_text, ui_text, [0.4, 1., 1., 1.]);
-        assign_text_color!(self, high_score_ui_text, ui_text, [1., 1., 1., 1.]);
-        play_sound(&world, SoundType::PaddleHit);
-        self.text_selected = TextSelectedType::Start;
-        self.up_key_pressed = true;
-      }
-      if is_key_down(&event, VirtualKeyCode::Down) && !self.down_key_pressed {
-        assign_text_color!(self, start_ui_text, ui_text, [1., 1., 1., 1.]);
-        assign_text_color!(self, high_score_ui_text, ui_text, [0.4, 1., 1., 1.]);
-        play_sound(&world, SoundType::PaddleHit);
-        self.text_selected = TextSelectedType::HighScore;
-        self.down_key_pressed = true;
-      }
-      if is_key_down(&event, VirtualKeyCode::Return) && !self.return_key_pressed {
-        play_sound(&world, SoundType::Confirm);
-        self.return_key_pressed = true;
-      }
-
-      if is_key_up(&event, VirtualKeyCode::Up) {
-        self.up_key_pressed = false;
-      }
-      if is_key_up(&event, VirtualKeyCode::Down) {
-        self.down_key_pressed = false;
-      }
-      if is_key_up(&event, VirtualKeyCode::Return) {
-        self.return_key_pressed = false;
-      }
-
-      match self.text_selected {
-        TextSelectedType::Start => {
-          if self.return_key_pressed {
-            return Trans::Switch(Box::new(PlayState {
-              title_ui_text: self.title_ui_text,
-            }));
+    if let StateEvent::Input(event) = &event {
+      if let InputEvent::KeyPressed { key_code, .. } = event {
+        match key_code {
+          VirtualKeyCode::Up => {
+            let mut ui_text = world.write_storage::<UiText>();
+            assign_text_color!(self, start_ui_text, ui_text, [0.4, 1., 1., 1.]);
+            assign_text_color!(self, high_score_ui_text, ui_text, [1., 1., 1., 1.]);
+            play_sound(&world, SoundType::PaddleHit);
+            self.text_selected = TextSelectedType::Start;
           }
+          VirtualKeyCode::Down => {
+            let mut ui_text = world.write_storage::<UiText>();
+            assign_text_color!(self, start_ui_text, ui_text, [1., 1., 1., 1.]);
+            assign_text_color!(self, high_score_ui_text, ui_text, [0.4, 1., 1., 1.]);
+            play_sound(&world, SoundType::PaddleHit);
+            self.text_selected = TextSelectedType::HighScore;
+          }
+          VirtualKeyCode::Return => {
+            play_sound(&world, SoundType::Confirm);
+            match self.text_selected {
+              TextSelectedType::Start => {
+                return Trans::Switch(Box::new(PlayState {
+                  title_ui_text: self.title_ui_text,
+                  debounce_timer: None,
+                }));
+              }
+              TextSelectedType::HighScore => {}
+            }
+          }
+          _ => {}
         }
-        TextSelectedType::HighScore => {}
       }
     }
+
     Trans::None
   }
 
@@ -352,31 +348,28 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
         };
 
         for (asset_type, sprite_sheet_handle) in sprite_sheets_map {
-          match asset_type {
-            AssetType::Background(sprite_pos) => {
-              let (width, height) = {
-                let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
-                let spritesheet = sprite_sheet_store
-                  .get(&sprite_sheet_handle)
-                  .expect("Couldn't find the handle for the background sprite!");
-                (
-                  spritesheet.sprites[sprite_pos].width,
-                  spritesheet.sprites[sprite_pos].height,
-                )
-              };
-              let mut transform = Transform::from(Vector3::new(0., 0., 1.1));
-              transform.set_scale(Vector3::new(
-                VIRTUAL_WIDTH / (width - 2.),
-                VIRTUAL_HEIGHT / (height - 2.),
-                1.0,
-              ));
-              world
-                .create_entity()
-                .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
-                .with(transform)
-                .build();
-            }
-            _ => {}
+          if let AssetType::Background(sprite_pos) = asset_type {
+            let (width, height) = {
+              let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
+              let spritesheet = sprite_sheet_store
+                .get(&sprite_sheet_handle)
+                .expect("Couldn't find the handle for the background sprite!");
+              (
+                spritesheet.sprites[sprite_pos].width,
+                spritesheet.sprites[sprite_pos].height,
+              )
+            };
+            let mut transform = Transform::from(Vector3::new(0., 0., 1.1));
+            transform.set_scale(Vector3::new(
+              VIRTUAL_WIDTH / (width - 2.),
+              VIRTUAL_HEIGHT / (height - 2.),
+              1.0,
+            ));
+            world
+              .create_entity()
+              .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
+              .with(transform)
+              .build();
           }
         }
         self.progress_counter = None;
@@ -391,6 +384,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
 #[derive(Default)]
 struct PlayState {
   title_ui_text: Option<Entity>,
+  debounce_timer: Option<f32>,
 }
 
 impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
@@ -409,27 +403,24 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     };
 
     for (asset_type, sprite_sheet_handle) in sprite_sheets_map {
-      match asset_type {
-        AssetType::PaddleSmall(sprite_pos) => {
-          let width = {
-            let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
-            let spritesheet = sprite_sheet_store
-              .get(&sprite_sheet_handle)
-              .expect("Couldn't find the handle for the paddle sprite!");
-            spritesheet.sprites[sprite_pos].width
-          };
-          world
-            .create_entity()
-            .with(Paddle { width })
-            .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
-            .with(Transform::from(Vector3::new(
-              0.,
-              -VIRTUAL_HEIGHT / 2. + 16.,
-              1.2,
-            )))
-            .build();
-        }
-        _ => {}
+      if let AssetType::PaddleSmall(sprite_pos) = asset_type {
+        let width = {
+          let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
+          let spritesheet = sprite_sheet_store
+            .get(&sprite_sheet_handle)
+            .expect("Couldn't find the handle for the paddle sprite!");
+          spritesheet.sprites[sprite_pos].width
+        };
+        world
+          .create_entity()
+          .with(Paddle { width })
+          .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
+          .with(Transform::from(Vector3::new(
+            0.,
+            -VIRTUAL_HEIGHT / 2. + 16.,
+            1.2,
+          )))
+          .build();
       }
     }
   }
@@ -438,6 +429,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     let StateData { world, .. } = data;
     let mut hiddens = world.write_storage::<Hidden>();
 
+    play_sound(&world, SoundType::Pause);
     if let Some(entity) = self.title_ui_text {
       hiddens.remove(entity).expect("Couldn't show paused text!");
     }
@@ -447,6 +439,9 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     let StateData { world, .. } = data;
     let mut hiddens = world.write_storage::<Hidden>();
 
+    self.debounce_timer = Some(0.25);
+
+    play_sound(&world, SoundType::Pause);
     if let Some(entity) = self.title_ui_text {
       hiddens
         .insert(entity, Hidden)
@@ -463,11 +458,18 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
       if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
         return Trans::Quit;
       }
+    }
 
-      if is_key_down(&event, VirtualKeyCode::Space) {
-        return Trans::Push(Box::new(PausedState));
+    if let StateEvent::Input(event) = &event {
+      if let InputEvent::KeyPressed { key_code, .. } = event {
+        if let VirtualKeyCode::Space = key_code {
+          if self.debounce_timer.is_none() {
+            return Trans::Push(Box::new(PausedState));
+          }
+        }
       }
     }
+
     Trans::None
   }
 
@@ -476,6 +478,14 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     data: StateData<'_, BreakoutGameData<'a, 'b>>,
   ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
     let StateData { world, .. } = data;
+
+    if let Some(mut time) = self.debounce_timer.take() {
+      time -= world.fetch::<Time>().delta_seconds();
+      if time >= 0.0 {
+        self.debounce_timer.replace(time);
+      }
+    }
+
     data.data.update(&world, true);
 
     Trans::None
@@ -495,8 +505,13 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PausedState {
       if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
         return Trans::Quit;
       }
-      if is_key_down(&event, VirtualKeyCode::Space) {
-        return Trans::Pop;
+    }
+
+    if let StateEvent::Input(event) = &event {
+      if let InputEvent::KeyPressed { key_code, .. } = event {
+        if let VirtualKeyCode::Space = key_code {
+          return Trans::Pop;
+        }
       }
     }
 
