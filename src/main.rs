@@ -247,17 +247,17 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
     if let Some(text) = self.title_ui_text {
       hiddens
         .insert(text, Hidden)
-        .expect("Couldn't delete title text!");
+        .expect("Couldn't hide title text!");
     }
     if let Some(text) = self.start_ui_text {
       hiddens
         .insert(text, Hidden)
-        .expect("Couldn't delete start text!");
+        .expect("Couldn't hide start text!");
     }
     if let Some(text) = self.high_score_ui_text {
       hiddens
         .insert(text, Hidden)
-        .expect("Couldn't delete high score text!");
+        .expect("Couldn't hide high score text!");
     }
   }
 
@@ -306,7 +306,9 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
       match self.text_selected {
         TextSelectedType::Start => {
           if self.return_key_pressed {
-            return Trans::Switch(Box::new(PlayState));
+            return Trans::Switch(Box::new(PlayState {
+              title_ui_text: self.title_ui_text,
+            }));
           }
         }
         TextSelectedType::HighScore => {}
@@ -387,11 +389,19 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
 }
 
 #[derive(Default)]
-struct PlayState;
+struct PlayState {
+  title_ui_text: Option<Entity>,
+}
 
 impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
   fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
-    let world = data.world;
+    let StateData { world, .. } = data;
+
+    if let Some(entity) = self.title_ui_text {
+      if let Some(title_ui_text) = world.write_storage::<UiText>().get_mut(entity) {
+        title_ui_text.text = String::from("PAUSED");
+      }
+    }
 
     let sprite_sheets_map = {
       let sprite_sheet_map = world.read_resource::<SpriteSheetMap>();
@@ -424,6 +434,26 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     }
   }
 
+  fn on_pause(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
+    let StateData { world, .. } = data;
+    let mut hiddens = world.write_storage::<Hidden>();
+
+    if let Some(entity) = self.title_ui_text {
+      hiddens.remove(entity).expect("Couldn't show paused text!");
+    }
+  }
+
+  fn on_resume(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
+    let StateData { world, .. } = data;
+    let mut hiddens = world.write_storage::<Hidden>();
+
+    if let Some(entity) = self.title_ui_text {
+      hiddens
+        .insert(entity, Hidden)
+        .expect("Couldn't hide paused text!");
+    }
+  }
+
   fn handle_event(
     &mut self,
     _data: StateData<'_, BreakoutGameData<'a, 'b>>,
@@ -433,6 +463,10 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
       if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
         return Trans::Quit;
       }
+
+      if is_key_down(&event, VirtualKeyCode::Space) {
+        return Trans::Push(Box::new(PausedState));
+      }
     }
     Trans::None
   }
@@ -441,8 +475,40 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     &mut self,
     data: StateData<'_, BreakoutGameData<'a, 'b>>,
   ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
-    let world = data.world;
+    let StateData { world, .. } = data;
     data.data.update(&world, true);
+
+    Trans::None
+  }
+}
+
+#[derive(Default)]
+struct PausedState;
+
+impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PausedState {
+  fn handle_event(
+    &mut self,
+    _data: StateData<'_, BreakoutGameData<'a, 'b>>,
+    event: StateEvent<StringBindings>,
+  ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
+    if let StateEvent::Window(event) = &event {
+      if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
+        return Trans::Quit;
+      }
+      if is_key_down(&event, VirtualKeyCode::Space) {
+        return Trans::Pop;
+      }
+    }
+
+    Trans::None
+  }
+
+  fn update(
+    &mut self,
+    data: StateData<'_, BreakoutGameData<'a, 'b>>,
+  ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
+    let StateData { world, .. } = data;
+    data.data.update(&world, false);
 
     Trans::None
   }
@@ -461,9 +527,7 @@ fn main() -> amethyst::Result<()> {
   let app_builder = Application::build(asset_dir, StartState::default())?;
   let game_data = BreakoutGameDataBuilder::default()
     .with_base_bundle(TransformBundle::new())
-    .with_base_bundle(
-      InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?,
-    )
+    .with_base_bundle(InputBundle::<StringBindings>::new())
     .with_base_bundle(UiBundle::<StringBindings>::new())
     .with_base_bundle(AudioBundle::default())
     .with_base_bundle(
@@ -473,6 +537,9 @@ fn main() -> amethyst::Result<()> {
         )
         .with_plugin(RenderFlat2D::default())
         .with_plugin(RenderUi::default()),
+    )
+    .with_running_bundle(
+      InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?,
     )
     .with_running(PaddleSystem, "paddle_system", &["input_system"]);
 

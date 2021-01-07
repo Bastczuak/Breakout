@@ -69,6 +69,16 @@ impl<'a, 'b> BreakoutGameDataBuilder<'a, 'b> {
     self
   }
 
+  pub fn with_running_bundle<B>(mut self, bundle: B) -> Self
+    where
+      B: SystemBundle<'a, 'b> + 'static,
+  {
+    self
+      .running_dispatcher_operations
+      .push(Box::new(AddBundle { bundle }));
+    self
+  }
+
   pub fn with_running<SD, S>(
     mut self,
     system_desc: SD,
