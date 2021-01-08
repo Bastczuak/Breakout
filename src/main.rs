@@ -32,6 +32,7 @@ use std::collections::HashMap;
 
 const VIRTUAL_WIDTH: f32 = 432.;
 const VIRTUAL_HEIGHT: f32 = 243.;
+const BALL_VELOCITY: f32 = 70.;
 
 ///
 /// macros
@@ -62,6 +63,7 @@ enum SoundType {
   PaddleHit,
   Confirm,
   Pause,
+  WallHit,
 }
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
@@ -80,10 +82,19 @@ impl Default for TextSelectedType {
 /// types
 ///
 
-#[derive(Component)]
+#[derive(Component, Debug)]
 #[storage(DenseVecStorage)]
 struct Paddle {
   width: f32,
+  height: f32,
+}
+
+#[derive(Component, Debug)]
+#[storage(DenseVecStorage)]
+struct Ball {
+  velocity_x: f32,
+  velocity_y: f32,
+  radius: f32,
 }
 
 #[derive(Default)]
@@ -98,7 +109,11 @@ fn init_camera(world: &mut World) {
   world
     .create_entity()
     .with(Camera::standard_2d(VIRTUAL_WIDTH, VIRTUAL_HEIGHT))
-    .with(Transform::from(Vector3::new(0., 0., 10.)))
+    .with(Transform::from(Vector3::new(
+      VIRTUAL_WIDTH / 2.,
+      VIRTUAL_HEIGHT / 2.,
+      10.,
+    )))
     .build();
 }
 
@@ -146,6 +161,7 @@ fn init_audio(world: &mut World, sound_type_list: Vec<SoundType>) {
       SoundType::PaddleHit => "sounds/paddle_hit.wav",
       SoundType::Confirm => "sounds/confirm.wav",
       SoundType::Pause => "sounds/pause.wav",
+      SoundType::WallHit => "sounds/wall_hit.wav",
     };
     let source_handle = {
       let loader = world.read_resource::<Loader>();
@@ -156,8 +172,8 @@ fn init_audio(world: &mut World, sound_type_list: Vec<SoundType>) {
   world.insert(sound_map);
 }
 
-fn play_sound(world: &World, sound_type: SoundType) {
-  let sound_map = world.read_resource::<SoundMap>();
+fn play_sound_in_state(world: &World, sound_type: SoundType) {
+  let sound_map = world.fetch::<SoundMap>();
   let output = world.try_fetch::<Output>();
   let storage = world.fetch::<AssetStorage<Source>>();
   if let Some(ref output) = output.as_ref() {
@@ -167,6 +183,25 @@ fn play_sound(world: &World, sound_type: SoundType) {
       }
     }
   }
+}
+
+fn play_sound_in_system(
+  sound_map: &SoundMap,
+  storage: &AssetStorage<Source>,
+  output: Option<&Output>,
+  sound_type: SoundType,
+) {
+  if let Some(ref output) = output.as_ref() {
+    if let Some(sound) = sound_map.0.get(&sound_type) {
+      if let Some(sound) = storage.get(&sound) {
+        output.play_once(sound, 0.15);
+      }
+    }
+  }
+}
+
+fn point_in_rect(x: f32, y: f32, left: f32, bottom: f32, right: f32, top: f32) -> bool {
+  x >= left && x <= right && y >= bottom && y <= top
 }
 
 ///
@@ -193,9 +228,77 @@ impl<'a> System<'a> for PaddleSystem {
         let paddle_x = transform.translation().x;
         transform.set_translation_x(
           (paddle_x + dx)
-            .min(VIRTUAL_WIDTH / 2. - paddle.width / 2.)
-            .max(-VIRTUAL_WIDTH / 2. + paddle.width / 2.),
+            .min(VIRTUAL_WIDTH - paddle.width / 2.)
+            .max(paddle.width / 2.),
         );
+      }
+    }
+  }
+}
+
+#[derive(Default, SystemDesc)]
+struct BallSystem;
+
+impl<'a> System<'a> for BallSystem {
+  type SystemData = (WriteStorage<'a, Transform>, ReadStorage<'a, Ball>, Read<'a, Time>);
+
+  fn run(&mut self, (mut transforms, balls, time): Self::SystemData) {
+    for (transform, ball) in (&mut transforms, &balls).join() {
+      transform.prepend_translation_x(ball.velocity_x * time.delta_seconds());
+      transform.prepend_translation_y(ball.velocity_y * time.delta_seconds());
+    }
+  }
+}
+
+#[derive(Default, SystemDesc)]
+struct CollisionSystem;
+
+impl<'a> System<'a> for CollisionSystem {
+  type SystemData = (
+    WriteStorage<'a, Ball>,
+    ReadStorage<'a, Paddle>,
+    ReadStorage<'a, Transform>,
+    Read<'a, SoundMap>,
+    Read<'a, AssetStorage<Source>>,
+    Option<Read<'a, Output>>,
+  );
+
+  fn run(&mut self, (mut balls, paddles, transforms, sounds, sources, output): Self::SystemData) {
+    for (ball, transform) in (&mut balls, &transforms).join() {
+      let ball_x = transform.translation().x;
+      let ball_y = transform.translation().y;
+
+      if (ball_y <= ball.radius && ball.velocity_y < 0.0)
+        || (ball_y >= VIRTUAL_HEIGHT - ball.radius && ball.velocity_y > 0.0)
+      {
+        play_sound_in_system(&sounds, &sources, output.as_deref(), SoundType::WallHit);
+        ball.velocity_y = -ball.velocity_y;
+      }
+
+      if (ball_x <= ball.radius && ball.velocity_x < 0.0)
+        || (ball_x >= VIRTUAL_WIDTH - ball.radius && ball.velocity_x > 0.0)
+      {
+        play_sound_in_system(&sounds, &sources, output.as_deref(), SoundType::WallHit);
+        ball.velocity_x = -ball.velocity_x;
+      }
+
+      for (paddle, transform) in (&paddles, &transforms).join() {
+        let paddle_x = transform.translation().x - (paddle.width * 0.5);
+        let paddle_y = transform.translation().y - (paddle.height * 0.5);
+
+        if point_in_rect(
+          ball_x,
+          ball_y,
+          paddle_x - ball.radius,
+          paddle_y - ball.radius,
+          paddle_x + paddle.width + ball.radius,
+          paddle_y + paddle.height + ball.radius,
+        ) {
+          if ball.velocity_y < 0.0 {
+            play_sound_in_system(&sounds, &sources, output.as_deref(), SoundType::PaddleHit);
+            ball.velocity_y = -ball.velocity_y;
+          }
+        }
       }
     }
   }
@@ -222,7 +325,15 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
     });
 
     init_camera(world);
-    init_audio(world, vec![SoundType::PaddleHit, SoundType::Confirm, SoundType::Pause]);
+    init_audio(
+      world,
+      vec![
+        SoundType::PaddleHit,
+        SoundType::Confirm,
+        SoundType::Pause,
+        SoundType::WallHit,
+      ],
+    );
     self.progress_counter = Some(init_assets(
       world,
       vec![
@@ -269,18 +380,18 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
             let mut ui_text = world.write_storage::<UiText>();
             assign_text_color!(self, start_ui_text, ui_text, [0.4, 1., 1., 1.]);
             assign_text_color!(self, high_score_ui_text, ui_text, [1., 1., 1., 1.]);
-            play_sound(&world, SoundType::PaddleHit);
+            play_sound_in_state(&world, SoundType::PaddleHit);
             self.text_selected = TextSelectedType::Start;
           }
           VirtualKeyCode::Down => {
             let mut ui_text = world.write_storage::<UiText>();
             assign_text_color!(self, start_ui_text, ui_text, [1., 1., 1., 1.]);
             assign_text_color!(self, high_score_ui_text, ui_text, [0.4, 1., 1., 1.]);
-            play_sound(&world, SoundType::PaddleHit);
+            play_sound_in_state(&world, SoundType::PaddleHit);
             self.text_selected = TextSelectedType::HighScore;
           }
           VirtualKeyCode::Return => {
-            play_sound(&world, SoundType::Confirm);
+            play_sound_in_state(&world, SoundType::Confirm);
             match self.text_selected {
               TextSelectedType::Start => {
                 return Trans::Switch(Box::new(PlayState {
@@ -345,7 +456,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
                 spritesheet.sprites[sprite_pos].height,
               )
             };
-            let mut transform = Transform::from(Vector3::new(0., 0., 1.1));
+            let mut transform = Transform::from(Vector3::new(VIRTUAL_WIDTH / 2., VIRTUAL_HEIGHT / 2., 1.1));
             transform.set_scale(Vector3::new(
               VIRTUAL_WIDTH / (width - 2.),
               VIRTUAL_HEIGHT / (height - 2.),
@@ -391,25 +502,48 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     for (asset_type, sprite_sheet_handle) in sprite_sheets_map {
       match asset_type {
         AssetType::PaddleSmall(sprite_pos) => {
-          let width = {
+          let (width, height) = {
             let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
             let spritesheet = sprite_sheet_store
               .get(&sprite_sheet_handle)
               .expect("Couldn't find the handle for the paddle sprite!");
+            (
+              spritesheet.sprites[sprite_pos].width,
+              spritesheet.sprites[sprite_pos].height,
+            )
+          };
+          world
+            .create_entity()
+            .with(Paddle { width, height })
+            .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
+            .with(Transform::from(Vector3::new(
+              VIRTUAL_WIDTH / 2.,
+              VIRTUAL_HEIGHT / 2. - VIRTUAL_HEIGHT / 2.0 + 16.0,
+              1.2,
+            )))
+            .build();
+        }
+        AssetType::Ball(sprite_pos) => {
+          let width = {
+            let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
+            let spritesheet = sprite_sheet_store
+              .get(&sprite_sheet_handle)
+              .expect("Couldn't find the handle for the ball sprite!");
             spritesheet.sprites[sprite_pos].width
           };
           world
             .create_entity()
-            .with(Paddle { width })
             .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
-            .with(Transform::from(Vector3::new(0., -VIRTUAL_HEIGHT / 2. + 16., 1.2)))
-            .build();
-        }
-        AssetType::Ball(sprite_pos) => {
-          world
-            .create_entity()
-            .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
-            .with(Transform::from(Vector3::new(0., 0., 1.3)))
+            .with(Transform::from(Vector3::new(
+              VIRTUAL_WIDTH / 2.,
+              VIRTUAL_HEIGHT / 2.,
+              1.3,
+            )))
+            .with(Ball {
+              velocity_x: -BALL_VELOCITY,
+              velocity_y: -BALL_VELOCITY,
+              radius: width / 2.,
+            })
             .build();
         }
         _ => {}
@@ -421,7 +555,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     let StateData { world, .. } = data;
     let mut hiddens = world.write_storage::<Hidden>();
 
-    play_sound(&world, SoundType::Pause);
+    play_sound_in_state(&world, SoundType::Pause);
     if let Some(entity) = self.title_ui_text {
       hiddens.remove(entity).expect("Couldn't show paused text!");
     }
@@ -433,7 +567,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
 
     self.debounce_timer = Some(0.25);
 
-    play_sound(&world, SoundType::Pause);
+    play_sound_in_state(&world, SoundType::Pause);
     if let Some(entity) = self.title_ui_text {
       hiddens.insert(entity, Hidden).expect("Couldn't hide paused text!");
     }
@@ -542,7 +676,9 @@ fn main() -> amethyst::Result<()> {
         .with_plugin(RenderUi::default()),
     )
     .with_running_bundle(InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?)
-    .with_running(PaddleSystem, "paddle_system", &["input_system"]);
+    .with_running(PaddleSystem, "paddle_system", &["input_system"])
+    .with_running(BallSystem, "ball_system", &["paddle_system"])
+    .with_running(CollisionSystem, "collision_system", &["paddle_system", "ball_system"]);
 
   let mut game = app_builder.build(game_data)?;
   game.run();
