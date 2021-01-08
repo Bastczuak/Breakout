@@ -5,22 +5,20 @@ use amethyst::assets::{AssetStorage, Loader, ProgressCounter};
 use amethyst::audio::output::Output;
 use amethyst::audio::{AudioBundle, Source, SourceHandle, WavFormat};
 use amethyst::input::{
-  is_close_requested, is_key_down, InputBundle, InputEvent, InputHandler, StringBindings,
-  VirtualKeyCode,
+  is_close_requested, is_key_down, InputBundle, InputEvent, InputHandler, StringBindings, VirtualKeyCode,
 };
 use amethyst::renderer::sprite::SpriteSheetHandle;
 use amethyst::renderer::types::DefaultBackend;
 use amethyst::renderer::{
-  Camera, ImageFormat, RenderFlat2D, RenderToWindow, RenderingBundle, SpriteRender, SpriteSheet,
-  SpriteSheetFormat, Texture,
+  Camera, ImageFormat, RenderFlat2D, RenderToWindow, RenderingBundle, SpriteRender, SpriteSheet, SpriteSheetFormat,
+  Texture,
 };
 use amethyst::utils::application_root_dir;
 use amethyst::{
   core::{math::Vector3, Hidden, Time, Transform, TransformBundle},
   derive::SystemDesc,
   ecs::prelude::{
-    Builder, DenseVecStorage, Entity, Join, Read, ReadStorage, System, SystemData, World, WorldExt,
-    WriteStorage,
+    Builder, DenseVecStorage, Entity, Join, Read, ReadStorage, System, SystemData, World, WorldExt, WriteStorage,
   },
   ecs::Component,
   ui::{RenderUi, UiBundle, UiCreator, UiFinder, UiText},
@@ -41,10 +39,7 @@ const VIRTUAL_HEIGHT: f32 = 243.;
 
 macro_rules! assign_text_color {
   ($self:ident, $field_name:ident, $ui_text: ident, $color:tt) => {
-    if let Some($field_name) = $self
-      .$field_name
-      .and_then(|entity| $ui_text.get_mut(entity))
-    {
+    if let Some($field_name) = $self.$field_name.and_then(|entity| $ui_text.get_mut(entity)) {
       $field_name.color = $color;
     }
   };
@@ -59,6 +54,7 @@ enum AssetType {
   Background(usize),
   PaddleSmall(usize),
   PaddleMedium(usize),
+  Ball(usize),
 }
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
@@ -133,12 +129,10 @@ fn init_assets(world: &mut World, asset_type_list: Vec<AssetType>) -> ProgressCo
   for &asset_type in asset_type_list.iter() {
     let (texture_path, ron_path) = match asset_type {
       AssetType::Background(_) => ("textures/background.png", "textures/background.ron"),
-      AssetType::PaddleSmall(_) | AssetType::PaddleMedium(_) => {
-        ("textures/breakout.png", "textures/breakout.ron")
-      }
+      AssetType::PaddleSmall(_) | AssetType::PaddleMedium(_) => ("textures/breakout.png", "textures/breakout.ron"),
+      AssetType::Ball(_) => ("textures/breakout.png", "textures/breakout.ron"),
     };
-    let sprite_sheet_handle =
-      load_sprite_sheet_handle(world, texture_path, ron_path, &mut progress_counter);
+    let sprite_sheet_handle = load_sprite_sheet_handle(world, texture_path, ron_path, &mut progress_counter);
     sprite_sheet_map.0.insert(asset_type, sprite_sheet_handle);
   }
   world.insert(sprite_sheet_map);
@@ -228,16 +222,14 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
     });
 
     init_camera(world);
-    init_audio(
-      world,
-      vec![SoundType::PaddleHit, SoundType::Confirm, SoundType::Pause],
-    );
+    init_audio(world, vec![SoundType::PaddleHit, SoundType::Confirm, SoundType::Pause]);
     self.progress_counter = Some(init_assets(
       world,
       vec![
         AssetType::Background(0),
         AssetType::PaddleSmall(0),
         AssetType::PaddleMedium(1),
+        AssetType::Ball(2),
       ],
     ));
   }
@@ -247,19 +239,13 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
     let mut hiddens = world.write_storage::<Hidden>();
 
     if let Some(text) = self.title_ui_text {
-      hiddens
-        .insert(text, Hidden)
-        .expect("Couldn't hide title text!");
+      hiddens.insert(text, Hidden).expect("Couldn't hide title text!");
     }
     if let Some(text) = self.start_ui_text {
-      hiddens
-        .insert(text, Hidden)
-        .expect("Couldn't hide start text!");
+      hiddens.insert(text, Hidden).expect("Couldn't hide start text!");
     }
     if let Some(text) = self.high_score_ui_text {
-      hiddens
-        .insert(text, Hidden)
-        .expect("Couldn't hide high score text!");
+      hiddens.insert(text, Hidden).expect("Couldn't hide high score text!");
     }
   }
 
@@ -403,24 +389,30 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     };
 
     for (asset_type, sprite_sheet_handle) in sprite_sheets_map {
-      if let AssetType::PaddleSmall(sprite_pos) = asset_type {
-        let width = {
-          let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
-          let spritesheet = sprite_sheet_store
-            .get(&sprite_sheet_handle)
-            .expect("Couldn't find the handle for the paddle sprite!");
-          spritesheet.sprites[sprite_pos].width
-        };
-        world
-          .create_entity()
-          .with(Paddle { width })
-          .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
-          .with(Transform::from(Vector3::new(
-            0.,
-            -VIRTUAL_HEIGHT / 2. + 16.,
-            1.2,
-          )))
-          .build();
+      match asset_type {
+        AssetType::PaddleSmall(sprite_pos) => {
+          let width = {
+            let sprite_sheet_store = world.read_resource::<AssetStorage<SpriteSheet>>();
+            let spritesheet = sprite_sheet_store
+              .get(&sprite_sheet_handle)
+              .expect("Couldn't find the handle for the paddle sprite!");
+            spritesheet.sprites[sprite_pos].width
+          };
+          world
+            .create_entity()
+            .with(Paddle { width })
+            .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
+            .with(Transform::from(Vector3::new(0., -VIRTUAL_HEIGHT / 2. + 16., 1.2)))
+            .build();
+        }
+        AssetType::Ball(sprite_pos) => {
+          world
+            .create_entity()
+            .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
+            .with(Transform::from(Vector3::new(0., 0., 1.3)))
+            .build();
+        }
+        _ => {}
       }
     }
   }
@@ -443,9 +435,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
 
     play_sound(&world, SoundType::Pause);
     if let Some(entity) = self.title_ui_text {
-      hiddens
-        .insert(entity, Hidden)
-        .expect("Couldn't hide paused text!");
+      hiddens.insert(entity, Hidden).expect("Couldn't hide paused text!");
     }
   }
 
@@ -547,15 +537,11 @@ fn main() -> amethyst::Result<()> {
     .with_base_bundle(AudioBundle::default())
     .with_base_bundle(
       RenderingBundle::<DefaultBackend>::new()
-        .with_plugin(
-          RenderToWindow::from_config_path(display_conf_path)?.with_clear([0., 0., 0., 1.]),
-        )
+        .with_plugin(RenderToWindow::from_config_path(display_conf_path)?.with_clear([0., 0., 0., 1.]))
         .with_plugin(RenderFlat2D::default())
         .with_plugin(RenderUi::default()),
     )
-    .with_running_bundle(
-      InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?,
-    )
+    .with_running_bundle(InputBundle::<StringBindings>::new().with_bindings_from_file(bindings_config_path)?)
     .with_running(PaddleSystem, "paddle_system", &["input_system"]);
 
   let mut game = app_builder.build(game_data)?;
