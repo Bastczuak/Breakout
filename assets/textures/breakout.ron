@@ -4,18 +4,21 @@ List((
   texture_height: 256,
   sprites: [
     (
+    // Paddle Small
       x:0,
       y:64,
       width: 32,
       height: 16,
     ),
     (
+    // Paddle Medium
       x:32,
       y:64,
       width: 64,
       height: 16,
     ),
     (
+    // Ball
       x: 96,
       y: 48,
       width: 8,
