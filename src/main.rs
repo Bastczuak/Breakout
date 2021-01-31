@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 const VIRTUAL_WIDTH: f32 = 432.;
 const VIRTUAL_HEIGHT: f32 = 243.;
-const BALL_VELOCITY: f32 = 70.;
+const BALL_VELOCITY: f32 = 140.;
 
 ///
 /// macros
@@ -95,8 +95,7 @@ struct Paddle {
 #[derive(Component, Debug)]
 #[storage(DenseVecStorage)]
 struct Ball {
-  velocity_x: f32,
-  velocity_y: f32,
+  direction: Vector3<f32>,
   radius: f32,
 }
 
@@ -266,8 +265,7 @@ impl<'a> System<'a> for BallSystem {
 
   fn run(&mut self, (mut transforms, balls, time): Self::SystemData) {
     for (transform, ball) in (&mut transforms, &balls).join() {
-      transform.prepend_translation_x(ball.velocity_x * time.delta_seconds());
-      transform.prepend_translation_y(ball.velocity_y * time.delta_seconds());
+      transform.prepend_translation(ball.direction * time.delta_seconds() * BALL_VELOCITY);
     }
   }
 }
@@ -289,24 +287,25 @@ impl<'a> System<'a> for CollisionSystem {
     for (ball, transform) in (&mut balls, &transforms).join() {
       let ball_x = transform.translation().x;
       let ball_y = transform.translation().y;
+      let ball_transform = transform;
 
-      if (ball_y <= ball.radius && ball.velocity_y < 0.0)
-        || (ball_y >= VIRTUAL_HEIGHT - ball.radius && ball.velocity_y > 0.0)
+      if (ball_y <= ball.radius && ball.direction.y < 0.0)
+        || (ball_y >= VIRTUAL_HEIGHT - ball.radius && ball.direction.y > 0.0)
       {
         play_sound_in_system(&sounds, SoundType::WallHit);
-        ball.velocity_y = -ball.velocity_y;
+        ball.direction.y = -ball.direction.y;
       }
 
-      if (ball_x <= ball.radius && ball.velocity_x < 0.0)
-        || (ball_x >= VIRTUAL_WIDTH - ball.radius && ball.velocity_x > 0.0)
+      if (ball_x <= ball.radius && ball.direction.x < 0.0)
+        || (ball_x >= VIRTUAL_WIDTH - ball.radius && ball.direction.x > 0.0)
       {
         play_sound_in_system(&sounds, SoundType::WallHit);
-        ball.velocity_x = -ball.velocity_x;
+        ball.direction.x = -ball.direction.x;
       }
 
       for (e, paddle, transform) in (&*entities, &paddles, &transforms).join() {
-        let paddle_x = transform.translation().x - (paddle.width * 0.5);
-        let paddle_y = transform.translation().y - (paddle.height * 0.5);
+        let paddle_x = transform.translation().x - paddle.width * 0.5;
+        let paddle_y = transform.translation().y - paddle.height * 0.5;
 
         if point_in_rect(
           ball_x,
@@ -316,18 +315,18 @@ impl<'a> System<'a> for CollisionSystem {
           paddle_x + paddle.width + ball.radius,
           paddle_y + paddle.height + ball.radius,
         ) {
-          if let Some(_) = players.get(e) {
-            if ball.velocity_y < 0.0 {
-              play_sound_in_system(&sounds, SoundType::PaddleHit);
-              ball.velocity_y = -ball.velocity_y;
-            }
+          if players.get(e).is_some() {
+            play_sound_in_system(&sounds, SoundType::PaddleHit);
           } else {
             entities
               .delete(e)
               .expect("Couldn't delete paddle while colliding with ball!");
             play_sound_in_system(&sounds, SoundType::BrickHit2);
-            ball.velocity_y = -ball.velocity_y;
           }
+
+          let delta = ball_transform.translation() - transform.translation();
+          let direction = delta.normalize();
+          ball.direction = Vector3::new(direction.x, direction.y, ball.direction.z);
         }
       }
     }
@@ -539,11 +538,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
             .with(Paddle { width, height })
             .with(Player)
             .with(SpriteRender::new(sprite_sheet_handle.clone(), sprite_pos))
-            .with(Transform::from(Vector3::new(
-              VIRTUAL_WIDTH / 2.,
-              VIRTUAL_HEIGHT / 2. - VIRTUAL_HEIGHT / 2.0 + 16.0,
-              1.2,
-            )))
+            .with(Transform::from(Vector3::new(VIRTUAL_WIDTH / 2., 16., 1.2)))
             .build();
         }
         AssetType::Ball(sprite_pos) => {
@@ -563,8 +558,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
               1.3,
             )))
             .with(Ball {
-              velocity_x: -BALL_VELOCITY,
-              velocity_y: -BALL_VELOCITY,
+              direction: Vector3::new(0., -1., 0.),
               radius: width / 2.,
             })
             .build();
