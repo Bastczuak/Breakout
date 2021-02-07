@@ -16,7 +16,7 @@ use amethyst::renderer::{
 };
 use amethyst::utils::application_root_dir;
 use amethyst::{
-  core::{math::Vector3, Hidden, Time, Transform, TransformBundle},
+  core::{math::Vector3, Time, Transform, TransformBundle},
   derive::SystemDesc,
   ecs::prelude::{
     Builder, DenseVecStorage, Entity, Join, NullStorage, Read, ReadStorage, ResourceId, System, SystemData, World,
@@ -350,7 +350,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
   fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
     world.exec(|mut creator: UiCreator<'_>| {
-      creator.create("ui/text.ron", ());
+      creator.create("ui/start.ron", ());
     });
 
     init_camera(world);
@@ -377,16 +377,10 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
 
   fn on_stop(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
-    let mut hiddens = world.write_storage::<Hidden>();
-
-    if let Some(text) = self.title_ui_text {
-      hiddens.insert(text, Hidden).expect("Couldn't hide title text!");
-    }
-    if let Some(text) = self.start_ui_text {
-      hiddens.insert(text, Hidden).expect("Couldn't hide start text!");
-    }
-    if let Some(text) = self.high_score_ui_text {
-      hiddens.insert(text, Hidden).expect("Couldn't hide high score text!");
+    let text = world.read_storage::<UiText>();
+    let entities = world.entities();
+    for (e, _) in (&entities, &text).join() {
+      entities.delete(e).expect("Couldn't delete ui text!");
     }
   }
 
@@ -424,10 +418,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
             play_sound_in_state(&world, SoundType::Confirm);
             match self.text_selected {
               TextSelectedType::Start => {
-                return Trans::Switch(Box::new(PlayState {
-                  title_ui_text: self.title_ui_text,
-                  debounce_timer: None,
-                }));
+                return Trans::Switch(Box::new(PlayState { debounce_timer: None }));
               }
               TextSelectedType::HighScore => {}
             }
@@ -510,19 +501,12 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
 
 #[derive(Default)]
 struct PlayState {
-  title_ui_text: Option<Entity>,
   debounce_timer: Option<f32>,
 }
 
 impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
   fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let StateData { world, .. } = data;
-
-    if let Some(entity) = self.title_ui_text {
-      if let Some(title_ui_text) = world.write_storage::<UiText>().get_mut(entity) {
-        title_ui_text.text = String::from("PAUSED");
-      }
-    }
 
     let sprite_sheets_map = {
       let sprite_sheet_map = world.read_resource::<SpriteSheetMap>();
@@ -585,26 +569,8 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
     }
   }
 
-  fn on_pause(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
-    let StateData { world, .. } = data;
-    let mut hiddens = world.write_storage::<Hidden>();
-
-    play_sound_in_state(&world, SoundType::Pause);
-    if let Some(entity) = self.title_ui_text {
-      hiddens.remove(entity).expect("Couldn't show paused text!");
-    }
-  }
-
-  fn on_resume(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
-    let StateData { world, .. } = data;
-    let mut hiddens = world.write_storage::<Hidden>();
-
+  fn on_resume(&mut self, _data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     self.debounce_timer = Some(0.25);
-
-    play_sound_in_state(&world, SoundType::Pause);
-    if let Some(entity) = self.title_ui_text {
-      hiddens.insert(entity, Hidden).expect("Couldn't hide paused text!");
-    }
   }
 
   fn handle_event(
@@ -654,6 +620,26 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
 struct PausedState;
 
 impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PausedState {
+  fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
+    let StateData { world, .. } = data;
+
+    world.exec(|mut creator: UiCreator<'_>| {
+      creator.create("ui/pause.ron", ());
+    });
+    play_sound_in_state(&world, SoundType::Pause);
+  }
+
+  fn on_stop(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
+    let StateData { world, .. } = data;
+    let text = world.read_storage::<UiText>();
+    let entities = world.entities();
+
+    for (e, _) in (&entities, &text).join() {
+      entities.delete(e).expect("Couldn't delete ui text!");
+    }
+    play_sound_in_state(&world, SoundType::Pause);
+  }
+
   fn handle_event(
     &mut self,
     _data: StateData<'_, BreakoutGameData<'a, 'b>>,
