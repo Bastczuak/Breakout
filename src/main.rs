@@ -339,9 +339,9 @@ impl<'a> System<'a> for CollisionSystem {
 
 #[derive(Default)]
 struct StartState {
-  title_ui_text: Option<Entity>,
   start_ui_text: Option<Entity>,
   high_score_ui_text: Option<Entity>,
+  ui_root: Option<Entity>,
   progress_counter: Option<ProgressCounter>,
   text_selected: TextSelectedType,
 }
@@ -349,10 +349,8 @@ struct StartState {
 impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
   fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
-    world.exec(|mut creator: UiCreator<'_>| {
-      creator.create("ui/start.ron", ());
-    });
 
+    self.ui_root = Some(world.exec(|mut creator: UiCreator<'_>| creator.create("ui/start.ron", ())));
     init_camera(world);
     init_audio(
       world,
@@ -377,11 +375,12 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
 
   fn on_stop(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let world = data.world;
-    let text = world.read_storage::<UiText>();
-    let entities = world.entities();
-    for (e, _) in (&entities, &text).join() {
-      entities.delete(e).expect("Couldn't delete ui text!");
+    if let Some(e) = self.ui_root {
+      world.delete_entity(e).expect("Failed to remove start menu!");
     }
+    self.ui_root = None;
+    self.start_ui_text = None;
+    self.high_score_ui_text = None;
   }
 
   fn handle_event(
@@ -437,13 +436,6 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for StartState {
   ) -> Trans<BreakoutGameData<'a, 'b>, StateEvent<StringBindings>> {
     let world = &mut data.world;
 
-    if self.title_ui_text.is_none() {
-      world.exec(|finder: UiFinder| {
-        if let Some(entity) = finder.find("title") {
-          self.title_ui_text = Some(entity);
-        }
-      });
-    }
     if self.start_ui_text.is_none() {
       world.exec(|finder: UiFinder<'_>| {
         if let Some(entity) = finder.find("start") {
@@ -588,7 +580,7 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
       if let InputEvent::KeyPressed { key_code, .. } = event {
         if let VirtualKeyCode::Space = key_code {
           if self.debounce_timer.is_none() {
-            return Trans::Push(Box::new(PausedState));
+            return Trans::Push(Box::new(PausedState::default()));
           }
         }
       }
@@ -617,26 +609,25 @@ impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PlayState {
 }
 
 #[derive(Default)]
-struct PausedState;
+struct PausedState {
+  ui_root: Option<Entity>,
+}
 
 impl<'a, 'b> State<BreakoutGameData<'a, 'b>, StateEvent> for PausedState {
   fn on_start(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let StateData { world, .. } = data;
 
-    world.exec(|mut creator: UiCreator<'_>| {
-      creator.create("ui/pause.ron", ());
-    });
+    self.ui_root = Some(world.exec(|mut creator: UiCreator<'_>| creator.create("ui/pause.ron", ())));
     play_sound_in_state(&world, SoundType::Pause);
   }
 
   fn on_stop(&mut self, data: StateData<'_, BreakoutGameData<'a, 'b>>) {
     let StateData { world, .. } = data;
-    let text = world.read_storage::<UiText>();
-    let entities = world.entities();
 
-    for (e, _) in (&entities, &text).join() {
-      entities.delete(e).expect("Couldn't delete ui text!");
+    if let Some(e) = self.ui_root {
+      world.delete_entity(e).expect("Failed to remove paused menu!");
     }
+    self.ui_root = None;
     play_sound_in_state(&world, SoundType::Pause);
   }
 

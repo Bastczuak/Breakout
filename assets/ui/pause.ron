@@ -21,7 +21,6 @@ Container(
                 font_size: 200.,
                 color: (1., 1., 1., 1.),
             ),
-            hidden: {},
         ),
     ],
 )
